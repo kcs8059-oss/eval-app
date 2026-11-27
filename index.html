@@ -115,14 +115,14 @@ const toast=t=>{const e=$('toast');e.textContent=t;e.classList.add('on');clearTi
 const GRADES=[['매우 우수',100],['우수',80],['보통',60],['미흡',40],['매우 미흡',20]];
 const OATH='본인은 이 평가의 대상과 친족·고용·거래·자문 등 이해관계가 없으며, 이해관계가 있는 대상은 아래에 표시하여 평가에서 제외하겠습니다. 평가 과정에서 알게 된 정보는 외부에 누설하지 않겠습니다.';
 const newEval=()=>({id:'e'+uid(),name:'',type:'서류평가',date:today(),place:'',status:'준비',inputMode:'score',items:[],bonuses:[],targets:[],judges:[],
-  rules:{trim:'total',trimMin:5,trimCount:1,failTotal:60,failItemPct:0,tie:[],select:'top',selectN:5,cut:70,round:2,devWarn:20},
+  rules:{trim:'total',trimMin:5,trimCount:1,failTotal:60,failItemPct:0,tie:[],tieBase:false,tieLast:'chair',select:'top',selectN:5,cut:70,round:2,devWarn:20},
   fair:{oath:true,lock:true,text:OATH},created:new Date().toISOString()});
 const newCode=ev=>{let c;do c=String(100000+Math.floor(Math.random()*900000));while(ev.judges.some(j=>j.code===c));return c};
 const maxTotal=ev=>ev.items.reduce((a,i)=>a+(+i.max||0),0);
 
 /* ================= 점수 계산 ================= */
 function compute(ev,scores){
-  const R=ev.rules,d=+R.round||2,items=ev.items;
+  const R=ev.rules,d=(R.round==null||R.round===''?2:+R.round),items=ev.items;
   const rows=ev.targets.map(t=>{
     const per=ev.judges.map(j=>{const s=scores[j.id];if(!s||!s.submitted)return null;if((s.conflicts||[]).includes(t.id))return{j,conflict:true};
       const m=(s.marks||{})[t.id]||{};return{j,m,tot:items.reduce((a,i)=>a+(+m[i.id]||0),0)}}).filter(Boolean);
@@ -144,13 +144,17 @@ function compute(ev,scores){
     return{t,per,n,trimmed:can?R.trim:'none',dropped,itemAvg,base,bonus,final,fail,dev,mean};
   });
   const tieItems=(R.tie||[]).filter(id=>items.some(i=>i.id===id));
-  const cmp=(a,b)=>{if(b.final!==a.final)return b.final-a.final;for(const id of tieItems){const x=r2(a.itemAvg[id],d),y=r2(b.itemAvg[id],d);if(x!==y)return y-x}return 0};
+  const lots=ev.lots||{};
+  const cmp=(a,b)=>{if(b.final!==a.final)return b.final-a.final;if(R.tieBase&&a.base!==b.base)return b.base-a.base;for(const id of tieItems){const x=r2(a.itemAvg[id],d),y=r2(b.itemAvg[id],d);if(x!==y)return y-x}
+    if(R.tieLast==='lot'&&lots[a.t.id]!=null&&lots[b.t.id]!=null)return lots[a.t.id]-lots[b.t.id];return 0};
   const ok=rows.filter(r=>!r.fail).sort(cmp);
   ok.forEach((r,i)=>{r.rank=i&&cmp(ok[i-1],r)===0?ok[i-1].rank:i+1});
   ok.forEach(r=>{r.tie=ok.some(o=>o!==r&&o.rank===r.rank)});
-  ok.forEach(r=>{r.selected=R.select==='top'?r.rank<=(+R.selectN||0):r.final>=(+R.cut||0)});
-  const cutTie=R.select==='top'&&ok.some(r=>r.rank<=+R.selectN&&ok.filter(o=>o.rank===r.rank).length>1&&r.rank+ok.filter(o=>o.rank===r.rank).length-1>+R.selectN);
-  return{rows:[...ok,...rows.filter(r=>r.fail)],cutTie};
+  const N=+R.selectN||0,last=R.tieLast||'chair';
+  ok.forEach(r=>{if(R.select!=='top'){r.selected=r.final>=(+R.cut||0);return}const g=ok.filter(o=>o.rank===r.rank).length;
+    if(r.rank<=N&&r.rank+g-1>N){if(last==='all'){r.selected=true;r.over=true}else{r.selected=false;r.pending=last==='lot'?'추첨 필요':'위원장 판단'}}else r.selected=r.rank<=N});
+  ok.forEach(r=>{if(lots[r.t.id]!=null&&ok.some(o=>o!==r&&o.final===r.final))r.lot=lots[r.t.id]});
+  return{rows:[...ok,...rows.filter(r=>r.fail)],cutTie:ok.some(r=>r.pending),overTie:ok.some(r=>r.over),hasTie:ok.some(r=>r.tie)};
 }
 function ruleText(ev){
   const R=ev.rules,k=R.trimCount||1;
@@ -158,7 +162,9 @@ function ruleText(ev){
   const f=[+R.failTotal?`평균 ${R.failTotal}점 미만 과락`:'',+R.failItemPct?`항목 평균이 배점의 ${R.failItemPct}% 미만이면 과락`:''].filter(Boolean).join(', ');
   const s=R.select==='top'?`과락이 아닌 대상 중 상위 ${R.selectN}개를 선정`:`과락이 아닌 대상 중 ${R.cut}점 이상 전원을 선정`;
   const ti=(R.tie||[]).map(id=>(ev.items.find(i=>i.id===id)||{}).name).filter(Boolean);
-  return `${t}하고, 가점을 더해 최종점수를 산출합니다. ${f?f+'입니다. ':''}${s}합니다. 동점이면 ${ti.length?ti.join(' → ')+' 평균이 높은 순, 그래도 같으면 ':''}위원장이 판단합니다.`;
+  const parts=[R.tieBase?'가점을 뺀 평가점수':'',...ti.map(n=>n+' 평균')].filter(Boolean);
+  const last=R.tieLast==='all'?'동점자를 모두 선정합니다':R.tieLast==='lot'?'추첨으로 순위를 정합니다':'위원장이 판단합니다';
+  return `${t}하고, 가점을 더해 최종점수를 산출합니다. ${f?f+'입니다. ':''}${s}합니다. 동점이면 ${parts.length?parts.join(' → ')+'이 높은 순으로 정하고, 그래도 같으면 ':''}${last}.`;
 }
 
 /* ================= 상태 ================= */
@@ -241,8 +247,13 @@ function tRules(){const ev=S.ev,R=ev.rules;return`
 <label>방식<select data-r="select"><option value="top"${R.select==='top'?' selected':''}>고득점 순 정해진 수</option><option value="cut"${R.select==='cut'?' selected':''}>기준 점수 이상 전원</option></select></label>
 <label>선정 수 (고득점 순일 때)<input data-r="selectN" inputmode="numeric" value="${esc(R.selectN)}"></label>
 <label>기준 점수 (기준 점수 방식일 때)<input data-r="cut" inputmode="decimal" value="${esc(R.cut)}"></label></div>
-<h2>동점 처리 순서</h2><p class="muted">최종점수가 같으면 아래 항목 평균이 높은 순으로 정합니다. 그래도 같으면 ‘동점’으로 표시하고 위원장이 판단합니다.</p><div class="grid">
+<h2>동점 처리</h2><p class="muted">최종점수가 같으면 ①→②→③ 순서로 비교해 순위를 정합니다.</p>
+<label class="chk"><input type="checkbox" data-rb="tieBase"${R.tieBase?' checked':''}> ① 가점을 뺀 평가점수(위원 평균)가 높은 순</label>
+<h3>② 항목 평균 비교 순서</h3><div class="grid">
 ${[0,1,2].map(n=>`<label>${n+1}순위<select data-tie="${n}"><option value="">선택 안 함</option>${ev.items.map(i=>`<option value="${esc(i.id)}"${R.tie[n]===i.id?' selected':''}>${esc(i.group?i.group+' — ':'')}${esc(i.name)}</option>`).join('')}</select></label>`).join('')}</div>
+<h3>③ 그래도 같을 때 처리 방법</h3><div class="grid">
+<label>처리 방법<select data-r="tieLast"><option value="chair"${(R.tieLast||'chair')==='chair'?' selected':''}>위원장(평가위원회) 판단 — 결과에 ‘동점’ 표시</option><option value="all"${R.tieLast==='all'?' selected':''}>동점자 모두 선정 (선정 수 초과 허용)</option><option value="lot"${R.tieLast==='lot'?' selected':''}>추첨 — 결과 화면의 추첨 버튼으로 순위 결정</option></select></label></div>
+<p class="muted">처리 방법은 선정 경계(예: 5위와 6위 사이)에 걸린 동점에만 적용됩니다. 그 밖의 동점은 같은 순위로 표시됩니다.</p>
 <h2>기타</h2><div class="grid">
 <label>소수점 자리수<select data-r="round">${[0,1,2,3].map(n=>`<option value="${n}"${+R.round===n?' selected':''}>${n}자리</option>`).join('')}</select></label>
 <label>편차 경고: 평균과 몇 점 이상 차이 (0이면 없음)<input data-r="devWarn" inputmode="decimal" value="${esc(R.devWarn)}"></label></div>
@@ -270,7 +281,7 @@ ${ev.judges.map((j,i)=>`<tr><td><input data-c="judges" data-i="${i}" data-k="nam
 <textarea id="pasteJudges"></textarea><div class="tools"><button class="g" data-a="pasteJudges" data-m="add">아래에 추가</button><button class="g" data-a="pasteJudges" data-m="replace">전체 바꾸기</button></div>
 <p class="muted">연락처·주민등록번호 등 개인정보는 입력하지 마세요. 위원 코드는 위원 본인에게만 전달하세요.</p>`}
 
-function tProgress(){const ev=S.ev,{rows}=compute(ev,S.scores);const d=+ev.rules.round||2;
+function tProgress(){const ev=S.ev,{rows}=compute(ev,S.scores);const d=(ev.rules.round==null||ev.rules.round===''?2:+ev.rules.round);
 const done=ev.judges.filter(j=>S.scores[j.id]?.submitted).length;return`
 <div class="tools" style="justify-content:space-between"><h2 style="margin:0">위원별 제출 현황 <span class="muted">${done} / ${ev.judges.length}명 제출</span></h2><button class="g s" data-a="refresh">새로고침</button></div>
 <div class="scroll"><table><thead><tr><th>위원</th><th>상태</th>${ev.targets.map(t=>`<th class="num">${esc(t.name)}</th>`).join('')}<th></th></tr></thead><tbody>
@@ -279,22 +290,24 @@ return`<tr><td><b>${esc(j.name)}</b>${j.chair?' <span class="muted">위원장</s
 ${ev.targets.map(t=>{if(!s)return'<td class="num muted">-</td>';if((s.conflicts||[]).includes(t.id))return'<td class="num c-m">제척</td>';const m=(s.marks||{})[t.id];
 const filled=m&&ev.items.every(i=>m[i.id]!==undefined&&m[i.id]!=='');const tot=m?ev.items.reduce((a,i)=>a+(+m[i.id]||0),0):null;const r=rows.find(x=>x.t.id===t.id);
 return`<td class="num${s.submitted&&r&&r.dev.has(j.id)?' dev':''}">${tot==null?'-':ft(tot)+(filled?'':' <span class="c-w">미완</span>')}</td>`}).join('')}
-<td>${s?.submitted?`<button class="g s" data-a="unlock" data-j="${esc(j.id)}">${S.confirm==='un'+j.id?'제출을 취소할까요?':'제출 취소'}</button>`:''}</td></tr>`}).join('')}
+<td style="white-space:nowrap">${s?.submitted?`<button class="g s" data-a="unlock" data-j="${esc(j.id)}">${S.confirm==='un'+j.id?'제출을 취소할까요?':'제출 취소'}</button> `:''}${s?`<button class="d s" data-a="wipe" data-j="${esc(j.id)}">${S.confirm==='wipe'+j.id?'모든 입력을 지울까요?':'입력 삭제'}</button>`:''}</td></tr>`}).join('')}
 </tbody></table></div>
-<p class="muted">노란 칸은 해당 대상 평균과 ${esc(ev.rules.devWarn)}점 이상 차이 나는 점수입니다(제출분 기준). ‘제출 취소’를 누르면 해당 위원이 다시 수정·제출할 수 있습니다.</p>
+<p class="muted">노란 칸은 해당 대상 평균과 ${esc(ev.rules.devWarn)}점 이상 차이 나는 점수입니다(제출분 기준). ‘제출 취소’를 누르면 해당 위원이 다시 수정·제출할 수 있습니다. ‘입력 삭제’는 그 위원의 서약·점수·의견을 모두 지워 처음 상태로 되돌립니다(되돌릴 수 없음). 지우기 전에 해당 위원 PC의 채점 화면을 닫아 주세요.</p>
 ${ev.status==='평가중'?'<p class="muted">이 화면은 15초마다 자동으로 새로고침됩니다.</p>':''}`}
 
-function tResult(){const ev=S.ev,R=ev.rules,d=+R.round||2,{rows,cutTie}=compute(ev,S.scores);
+function tResult(){const ev=S.ev,R=ev.rules,d=(R.round==null||R.round===''?2:+R.round),{rows,cutTie,overTie,hasTie}=compute(ev,S.scores);
 const pend=ev.judges.filter(j=>!S.scores[j.id]?.submitted).length;return`
 <div class="note t">${esc(ruleText(ev))}</div>
 ${pend?`<div class="note">아직 제출하지 않은 위원이 ${pend}명 있습니다. 현재 결과는 제출한 위원 점수만으로 계산한 것입니다.</div>`:''}
-${cutTie?'<div class="note" style="border-color:var(--red)">선정 경계에 동점이 있습니다. 위원장 판단이 필요합니다.</div>':''}
-<div class="tools"><button data-a="xls">엑셀로 복사</button><button class="g" data-a="csv">엑셀 파일(CSV) 받기</button><button class="g" data-a="printResult">결과표 인쇄</button><button class="g" data-a="printSheets">위원별 채점표 인쇄</button><button class="g s" data-a="refresh">새로고침</button></div>
+${cutTie?`<div class="note" style="border-color:var(--red)">선정 경계에 동점이 있습니다. ${R.tieLast==='lot'?'아래 ‘동점 추첨’ 버튼으로 순위를 정해 주세요.':'위원장(평가위원회) 판단이 필요합니다.'}</div>`:''}
+${overTie?`<div class="note">선정 경계 동점자를 모두 선정해 선정 수가 ${esc(R.selectN)}개를 넘었습니다.</div>`:''}
+${R.tieLast==='lot'&&(hasTie||ev.lots)?`<div class="tools">${ev.lots?`<span class="muted">추첨 완료 ${esc((ev.lotAt||'').slice(0,16).replace('T',' '))}</span><button class="d s" data-a="lotReset">${S.confirm==='lotReset'?'추첨 결과를 지울까요?':'추첨 초기화'}</button>`:'<button data-a="lot">동점 추첨</button>'}</div>`:''}
+<div class="tools"><button data-a="xls">엑셀로 복사</button><button class="g" data-a="csv">엑셀 파일(CSV) 받기</button><button class="g" data-a="printResult">결과표 인쇄</button><button class="g" data-a="printSheets">위원별 채점표 인쇄 (대상별 1장)</button><button class="g s" data-a="refresh">새로고침</button></div>
 <div class="scroll"><table><thead><tr><th class="num">순위</th><th>대상</th>${ev.judges.map(j=>`<th class="num">${esc(j.name)}</th>`).join('')}<th class="num">평균</th><th class="num">가점</th><th class="num">최종</th><th>결과</th></tr></thead><tbody>
-${rows.map(r=>`<tr class="${r.selected?'sel':''}"><td class="num"><b>${r.fail?'-':r.rank}</b>${r.tie?' <span class="c-w">동점</span>':''}</td><td><b>${esc(r.t.name)}</b><div class="muted">${esc(r.t.title)}</div></td>
+${rows.map(r=>`<tr class="${r.selected?'sel':''}"><td class="num"><b>${r.fail?'-':r.rank}</b>${r.tie?' <span class="c-w">동점</span>':''}${r.lot!=null?` <span class="muted">추첨 ${r.lot}</span>`:''}</td><td><b>${esc(r.t.name)}</b><div class="muted">${esc(r.t.title)}</div></td>
 ${ev.judges.map(j=>{const p=r.per.find(x=>x.j.id===j.id);if(!p)return'<td class="num muted">-</td>';if(p.conflict)return'<td class="num c-m">제척</td>';const dr=r.dropped.has(j.id+':hi')||r.dropped.has(j.id+':lo');return`<td class="num${dr?' drop':''}${r.dev.has(j.id)?' dev':''}">${ft(p.tot)}</td>`}).join('')}
 <td class="num">${r.n?fmt(r.base,d):'-'}</td><td class="num">${r.bonus?fmt(r.bonus,d):''}</td><td class="num"><b>${r.n?fmt(r.final,d):'-'}</b></td>
-<td>${r.fail?`<span class="chip c-x">${esc(r.fail)}</span>`:r.selected?'<span class="chip c-t">선정</span>':'<span class="chip c-m">미선정</span>'}</td></tr>`).join('')}
+<td>${r.fail?`<span class="chip c-x">${esc(r.fail)}</span>`:r.pending?`<span class="chip c-w">동점 — ${esc(r.pending)}</span>`:r.selected?'<span class="chip c-t">선정</span>':'<span class="chip c-m">미선정</span>'}</td></tr>`).join('')}
 </tbody></table></div>
 <p class="muted">줄 그은 점수는 최고·최저로 제외된 점수입니다. 항목별 제외 방식에서는 위원 총점에 줄이 표시되지 않고 항목 단위로 제외됩니다.</p>
 ${ev.judges.some(j=>S.scores[j.id]?.overall)?`<h2>종합의견</h2>${ev.judges.filter(j=>S.scores[j.id]?.overall).map(j=>`<p><b>${esc(j.name)}${j.chair?' (위원장)':''}</b><br>${esc(S.scores[j.id].overall)}</p>`).join('')}`:''}`}
@@ -358,22 +371,29 @@ function pasteJudges(mode){if(mode==='replace')S.ev.judges=[];const out=rowsOf($
   out.forEach(j=>{j.code=newCode(S.ev);S.ev.judges.push(j)});saveEv();render();toast(out.length+'명을 반영했습니다')}
 
 /* ================= 출력 ================= */
-function table2d(){const ev=S.ev,d=+ev.rules.round||2,{rows}=compute(ev,S.scores);
+const resTxt=r=>r.fail||(r.pending?'동점('+r.pending+')':r.selected?'선정':'미선정');
+function table2d(){const ev=S.ev,d=(ev.rules.round==null||ev.rules.round===''?2:+ev.rules.round),{rows}=compute(ev,S.scores);
   const h=['순위','대상','사업자번호','대표자','과제명',...ev.judges.map(j=>j.name),...ev.items.map(i=>i.name+' 평균'),'평균','가점','최종','결과'];
-  const b=rows.map(r=>[r.fail?'':r.rank+(r.tie?' (동점)':''),r.t.name,r.t.bizno,r.t.rep,r.t.title,...ev.judges.map(j=>{const p=r.per.find(x=>x.j.id===j.id);return!p?'':p.conflict?'제척':p.tot}),...ev.items.map(i=>r.n?fmt(r.itemAvg[i.id],d):''),r.n?fmt(r.base,d):'',r.bonus||'',r.n?fmt(r.final,d):'',r.fail||(r.selected?'선정':'미선정')]);
+  const b=rows.map(r=>[r.fail?'':r.rank+(r.tie?' (동점)':''),r.t.name,r.t.bizno,r.t.rep,r.t.title,...ev.judges.map(j=>{const p=r.per.find(x=>x.j.id===j.id);return!p?'':p.conflict?'제척':p.tot}),...ev.items.map(i=>r.n?fmt(r.itemAvg[i.id],d):''),r.n?fmt(r.base,d):'',r.bonus||'',r.n?fmt(r.final,d):'',resTxt(r)]);
   return[h,...b]}
 function doPrint(html){$('print').innerHTML=html;try{window.print()}catch{toast('이 화면에서는 인쇄가 차단되어 있습니다. 배포본(GitHub 주소)에서 인쇄해 주세요')}}
 const signBox=names=>`<div class="sign">${names.map(n=>`<span>${esc(n)} (서명)</span>`).join('')}</div>`;
-function printResult(){const ev=S.ev,d=+ev.rules.round||2,{rows}=compute(ev,S.scores);const chair=ev.judges.find(j=>j.chair);
+function printResult(){const ev=S.ev,d=(ev.rules.round==null||ev.rules.round===''?2:+ev.rules.round),{rows}=compute(ev,S.scores);const chair=ev.judges.find(j=>j.chair);
   doPrint(`<div class="pg"><h1>${esc(ev.name)} 평가 결과표</h1><div class="meta"><span>평가일: ${esc(ev.date)} ${esc(ev.place)}</span><span>${esc(ev.type)} · 만점 ${maxTotal(ev)}점</span></div>
   <table><thead><tr><th>순위</th><th>대상</th>${ev.judges.map((j,i)=>`<th>위원${i+1}</th>`).join('')}<th>평균</th><th>가점</th><th>최종</th><th>결과</th></tr></thead><tbody>
-  ${rows.map(r=>`<tr><td>${r.fail?'-':r.rank}</td><td>${esc(r.t.name)}</td>${ev.judges.map(j=>{const p=r.per.find(x=>x.j.id===j.id);return`<td style="text-align:right">${!p?'':p.conflict?'제척':(r.dropped.has(j.id+':hi')||r.dropped.has(j.id+':lo'))?'('+ft(p.tot)+')':ft(p.tot)}</td>`}).join('')}<td style="text-align:right">${r.n?fmt(r.base,d):''}</td><td style="text-align:right">${r.bonus||''}</td><td style="text-align:right"><b>${r.n?fmt(r.final,d):''}</b></td><td>${esc(r.fail||(r.selected?'선정':'미선정'))}</td></tr>`).join('')}
+  ${rows.map(r=>`<tr><td>${r.fail?'-':r.rank}</td><td>${esc(r.t.name)}</td>${ev.judges.map(j=>{const p=r.per.find(x=>x.j.id===j.id);return`<td style="text-align:right">${!p?'':p.conflict?'제척':(r.dropped.has(j.id+':hi')||r.dropped.has(j.id+':lo'))?'('+ft(p.tot)+')':ft(p.tot)}</td>`}).join('')}<td style="text-align:right">${r.n?fmt(r.base,d):''}</td><td style="text-align:right">${r.bonus||''}</td><td style="text-align:right"><b>${r.n?fmt(r.final,d):''}</b></td><td>${esc(resTxt(r))}</td></tr>`).join('')}
   </tbody></table><p>※ ${esc(ruleText(ev))} 괄호 점수는 최고·최저 제외 점수.</p>${signBox(ev.judges.map(j=>j.name+(j.chair?' 위원장':' 위원')))}</div>`)}
-function printSheets(){const ev=S.ev;doPrint(ev.judges.map(j=>{const s=S.scores[j.id]||{marks:{},conflicts:[]};
-  return`<div class="pg"><h1>${esc(ev.name)} 평가 채점표</h1><div class="meta"><span>평가위원: ${esc(j.name)} (${esc(j.org)})</span><span>평가일: ${esc(ev.date)}</span></div>
-  <table><thead><tr><th>대상</th>${ev.items.map(i=>`<th>${esc(i.name)} (${esc(i.max)})</th>`).join('')}<th>합계</th></tr></thead><tbody>
-  ${ev.targets.map(t=>{if((s.conflicts||[]).includes(t.id))return`<tr><td>${esc(t.name)}</td><td colspan="${ev.items.length+1}">제척</td></tr>`;const m=(s.marks||{})[t.id]||{};return`<tr><td>${esc(t.name)}</td>${ev.items.map(i=>`<td style="text-align:right">${esc(m[i.id]??'')}</td>`).join('')}<td style="text-align:right"><b>${ft(ev.items.reduce((a,i)=>a+(+m[i.id]||0),0))}</b></td></tr>`}).join('')}
-  </tbody></table>${s.overall?`<p><b>종합의견</b> ${esc(s.overall)}</p>`:''}${signBox([j.name+' 위원'])}</div>`}).join(''))}
+function printSheets(){const ev=S.ev;const pages=[];
+  ev.judges.forEach(j=>{const s=S.scores[j.id];if(!s||!s.submitted)return;ev.targets.forEach(t=>{if((s.conflicts||[]).includes(t.id))return;const m=(s.marks||{})[t.id];if(!m)return;let lastG=null;
+    const tot=ev.items.reduce((a,i)=>a+(+m[i.id]||0),0);
+    pages.push(`<div class="pg"><h1>${esc(ev.name)} 평가 채점표</h1>
+    <table style="margin:10pt 0"><tbody><tr><th style="width:18%">평가 대상</th><td>${esc(t.name)}</td><th style="width:18%">대표자</th><td>${esc(t.rep)}</td></tr><tr><th>과제명</th><td colspan="3">${esc(t.title)}</td></tr><tr><th>평가위원</th><td>${esc(j.name)} (${esc(j.org)})</td><th>평가일</th><td>${esc(ev.date)}</td></tr></tbody></table>
+    <table><thead><tr><th>평가 항목</th><th>세부 항목</th><th style="width:12%">배점</th><th style="width:12%">점수</th></tr></thead><tbody>
+    ${ev.items.map(i=>{const g=i.group!==lastG?i.group:'';lastG=i.group;return`<tr><td>${esc(g)}</td><td>${esc(i.name)}</td><td style="text-align:right">${esc(i.max)}</td><td style="text-align:right">${esc(m[i.id]??'')}</td></tr>`}).join('')}
+    <tr><th colspan="2">합계</th><th style="text-align:right">${maxTotal(ev)}</th><th style="text-align:right">${ft(tot)}</th></tr></tbody></table>
+    <table style="margin-top:10pt"><tbody><tr><th style="width:18%;height:70pt">평가 의견</th><td>${esc((s.cmt||{})[t.id]||'')}</td></tr></tbody></table>
+    ${signBox([j.name+(j.chair?' 위원장':' 위원')])}</div>`)})});
+  if(!pages.length)return toast('제출된 채점표가 없습니다');doPrint(pages.join(''))}
 function printCodes(){const ev=S.ev;doPrint(`<div class="pg"><h1>${esc(ev.name)} 평가위원 코드</h1><table><thead><tr><th>위원</th><th>소속</th><th>위원 코드</th></tr></thead><tbody>${ev.judges.map(j=>`<tr><td style="padding:14pt 6pt">${esc(j.name)}</td><td>${esc(j.org)}</td><td style="font-size:18pt;letter-spacing:4pt">${esc(j.code)}</td></tr>`).join('')}</tbody></table><p>※ 줄을 따라 잘라 위원에게 한 장씩 전달하세요.</p></div>`)}
 
 /* ================= 샘플 ================= */
@@ -433,9 +453,14 @@ document.addEventListener('click',async e=>{const b=e.target.closest('[data-a]')
   if(a==='pasteTargets')return pasteTargets(b.dataset.m);
   if(a==='pasteJudges')return pasteJudges(b.dataset.m);
   if(a==='saveTpl'){if(!ev.items.length)return toast('평가표가 비어 있습니다');const name=(ev.name||'평가표')+' 평가표';await Store.set('tpl:'+uid(),{name,items:ev.items,bonuses:ev.bonuses,inputMode:ev.inputMode,rules:ev.rules});toast('템플릿으로 저장했습니다: '+name);return fillTpl()}
+  if(a==='wipe'){const id=b.dataset.j;if(S.confirm!=='wipe'+id){S.confirm='wipe'+id;return render()}await Store.del('score:'+ev.id+':'+id);delete S.scores[id];S.confirm=null;toast('해당 위원의 입력을 모두 삭제했습니다');return render()}
   if(a==='unlock'){const id=b.dataset.j;if(S.confirm!=='un'+id){S.confirm='un'+id;return render()}const s=S.scores[id];s.submitted=false;await Store.set('score:'+ev.id+':'+id,s);S.confirm=null;toast('제출을 취소했습니다. 위원이 다시 수정할 수 있습니다');return render()}
   if(a==='xls'){const t=table2d().map(r=>r.map(x=>String(x??'').replace(/[\t\n]/g,' ')).join('\t')).join('\n');try{await navigator.clipboard.writeText(t);toast('복사했습니다. 엑셀에 붙여넣기 하세요')}catch{toast('복사가 차단되었습니다. CSV 받기를 이용해 주세요')}return}
   if(a==='csv'){const t='﻿'+table2d().map(r=>r.map(x=>'"'+String(x??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');try{const u=URL.createObjectURL(new Blob([t],{type:'text/csv;charset=utf-8'}));const l=document.createElement('a');l.href=u;l.download=(ev.name||'평가결과')+'.csv';document.body.appendChild(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),2000)}catch{toast('이 화면에서는 파일 받기가 차단되어 있습니다. ‘엑셀로 복사’를 이용해 주세요')}return}
+  if(a==='lot'){const{rows}=compute(ev,S.scores);const groups={};rows.filter(r=>!r.fail&&rows.some(o=>o!==r&&!o.fail&&o.final===r.final)).forEach(r=>(groups[r.final]=groups[r.final]||[]).push(r.t.id));
+    const lots={};Object.values(groups).forEach(g=>{for(let i=g.length-1;i>0;i--){const k=Math.floor(Math.random()*(i+1));[g[i],g[k]]=[g[k],g[i]]}g.forEach((id,i)=>lots[id]=i+1)});
+    if(!Object.keys(lots).length)return toast('추첨할 동점이 없습니다');ev.lots=lots;ev.lotAt=new Date(Date.now()+9*36e5).toISOString();saveEv();toast('추첨했습니다. 같은 점수끼리 추첨 순번대로 순위가 정해집니다');return render()}
+  if(a==='lotReset'){if(S.confirm!=='lotReset'){S.confirm='lotReset';return render()}delete ev.lots;delete ev.lotAt;S.confirm=null;saveEv();return render()}
   if(a==='printResult')return printResult();
   if(a==='printSheets')return printSheets();
   if(a==='printCodes')return printCodes();
@@ -444,7 +469,8 @@ document.addEventListener('click',async e=>{const b=e.target.closest('[data-a]')
 document.addEventListener('input',e=>{const el=e.target,ev=S.ev,d=el.dataset;if(!ev)return;
   if(d.b){ev[d.b]=el.value;return saveEv()}
   if(d.c&&d.k){let v=el.value;if(d.k==='max'||d.k==='pts')v=v===''?'':Number(v.replace(/[^\d.-]/g,''))||0;ev[d.c][+d.i][d.k]=v;saveEv();if(d.k==='max'){const h=document.querySelector('h2 .muted');if(h)h.textContent='만점 '+maxTotal(ev)+'점'}return}
-  if(d.r){ev.rules[d.r]=['trim','select'].includes(d.r)?el.value:Number(el.value)||0;saveEv();const n=$('ruleText');if(n)n.textContent=ruleText(ev);return}
+  if(d.rb){ev.rules[d.rb]=el.checked;saveEv();const n=$('ruleText');if(n)n.textContent=ruleText(ev);return}
+  if(d.r){ev.rules[d.r]=['trim','select','tieLast'].includes(d.r)?el.value:Number(el.value)||0;saveEv();const n=$('ruleText');if(n)n.textContent=ruleText(ev);return}
   if(d.fair){ev.fair[d.fair]=el.type==='checkbox'?el.checked:el.value;return saveEv()}
   if(d.sc){const s=S.js,t=S.cur;let v=el.value.trim();if(v!==''){v=Number(v);const mx=+(d.max??Infinity);if(isNaN(v)||v<0||v>mx){$('scmsg').textContent=`0 ~ ${mx} 사이로 입력해 주세요`;el.style.borderColor='var(--red)';return}}
     el.style.borderColor='';$('scmsg').textContent='';s.marks[t][d.sc]=v;const tot=ev.items.reduce((a,i)=>a+(+s.marks[t][i.id]||0),0);$('tot').textContent=ft(tot);saveJudge();return}
