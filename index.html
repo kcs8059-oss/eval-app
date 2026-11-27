@@ -302,7 +302,7 @@ ${pend?`<div class="note">아직 제출하지 않은 위원이 ${pend}명 있습
 ${cutTie?`<div class="note" style="border-color:var(--red)">선정 경계에 동점이 있습니다. ${R.tieLast==='lot'?'아래 ‘동점 추첨’ 버튼으로 순위를 정해 주세요.':'위원장(평가위원회) 판단이 필요합니다.'}</div>`:''}
 ${overTie?`<div class="note">선정 경계 동점자를 모두 선정해 선정 수가 ${esc(R.selectN)}개를 넘었습니다.</div>`:''}
 ${R.tieLast==='lot'&&(hasTie||ev.lots)?`<div class="tools">${ev.lots?`<span class="muted">추첨 완료 ${esc((ev.lotAt||'').slice(0,16).replace('T',' '))}</span><button class="d s" data-a="lotReset">${S.confirm==='lotReset'?'추첨 결과를 지울까요?':'추첨 초기화'}</button>`:'<button data-a="lot">동점 추첨</button>'}</div>`:''}
-<div class="tools"><button data-a="xls">엑셀로 복사</button><button class="g" data-a="csv">엑셀 파일(CSV) 받기</button><button class="g" data-a="printResult">결과표 인쇄</button><button class="g" data-a="printSheets">위원별 채점표 인쇄 (대상별 1장)</button><button class="g s" data-a="refresh">새로고침</button></div>
+<div class="tools"><button data-a="xls">엑셀로 복사</button><button class="g" data-a="csv">엑셀 파일(CSV) 받기</button><button class="g" data-a="printResult">결과표 인쇄</button><span class="tools" style="margin:0;gap:6px"><select id="pj" style="width:auto;min-width:150px" aria-label="채점표 인쇄할 위원">${(()=>{const sub=ev.judges.filter(j=>S.scores[j.id]?.submitted);return`<option value="">제출 위원 전체 (${sub.length}명)</option>`+ev.judges.map(j=>`<option value="${esc(j.id)}"${S.scores[j.id]?.submitted?'':' disabled'}>${esc(j.name)}${S.scores[j.id]?.submitted?'':' (미제출)'}</option>`).join('')})()}</select><button class="g" data-a="printSheets">위원별 채점표 인쇄 (대상별 1장)</button></span><button class="g s" data-a="refresh">새로고침</button></div>
 <div class="scroll"><table><thead><tr><th class="num">순위</th><th>대상</th>${ev.judges.map(j=>`<th class="num">${esc(j.name)}</th>`).join('')}<th class="num">평균</th><th class="num">가점</th><th class="num">최종</th><th>결과</th></tr></thead><tbody>
 ${rows.map(r=>`<tr class="${r.selected?'sel':''}"><td class="num"><b>${r.fail?'-':r.rank}</b>${r.tie?' <span class="c-w">동점</span>':''}${r.lot!=null?` <span class="muted">추첨 ${r.lot}</span>`:''}</td><td><b>${esc(r.t.name)}</b><div class="muted">${esc(r.t.title)}</div></td>
 ${ev.judges.map(j=>{const p=r.per.find(x=>x.j.id===j.id);if(!p)return'<td class="num muted">-</td>';if(p.conflict)return'<td class="num c-m">제척</td>';const dr=r.dropped.has(j.id+':hi')||r.dropped.has(j.id+':lo');return`<td class="num${dr?' drop':''}${r.dev.has(j.id)?' dev':''}">${ft(p.tot)}</td>`}).join('')}
@@ -383,17 +383,17 @@ function printResult(){const ev=S.ev,d=(ev.rules.round==null||ev.rules.round==='
   <table><thead><tr><th>순위</th><th>대상</th>${ev.judges.map((j,i)=>`<th>위원${i+1}</th>`).join('')}<th>평균</th><th>가점</th><th>최종</th><th>결과</th></tr></thead><tbody>
   ${rows.map(r=>`<tr><td>${r.fail?'-':r.rank}</td><td>${esc(r.t.name)}</td>${ev.judges.map(j=>{const p=r.per.find(x=>x.j.id===j.id);return`<td style="text-align:right">${!p?'':p.conflict?'제척':(r.dropped.has(j.id+':hi')||r.dropped.has(j.id+':lo'))?'('+ft(p.tot)+')':ft(p.tot)}</td>`}).join('')}<td style="text-align:right">${r.n?fmt(r.base,d):''}</td><td style="text-align:right">${r.bonus||''}</td><td style="text-align:right"><b>${r.n?fmt(r.final,d):''}</b></td><td>${esc(resTxt(r))}</td></tr>`).join('')}
   </tbody></table><p>※ ${esc(ruleText(ev))} 괄호 점수는 최고·최저 제외 점수.</p>${signBox(ev.judges.map(j=>j.name+(j.chair?' 위원장':' 위원')))}</div>`)}
-function printSheets(){const ev=S.ev;const pages=[];
-  ev.judges.forEach(j=>{const s=S.scores[j.id];if(!s||!s.submitted)return;ev.targets.forEach(t=>{if((s.conflicts||[]).includes(t.id))return;const m=(s.marks||{})[t.id];if(!m)return;let lastG=null;
+function printSheets(){const ev=S.ev;const pages=[];const pick=($('pj')||{}).value||'';
+  ev.judges.filter(j=>!pick||j.id===pick).forEach(j=>{const s=S.scores[j.id];if(!s||!s.submitted)return;ev.targets.forEach(t=>{if((s.conflicts||[]).includes(t.id))return;const m=(s.marks||{})[t.id];if(!m)return;let lastG=null;
     const tot=ev.items.reduce((a,i)=>a+(+m[i.id]||0),0);
     pages.push(`<div class="pg"><h1>${esc(ev.name)} 평가 채점표</h1>
-    <table style="margin:10pt 0"><tbody><tr><th style="width:18%">평가 대상</th><td>${esc(t.name)}</td><th style="width:18%">대표자</th><td>${esc(t.rep)}</td></tr><tr><th>과제명</th><td colspan="3">${esc(t.title)}</td></tr><tr><th>평가위원</th><td>${esc(j.name)} (${esc(j.org)})</td><th>평가일</th><td>${esc(ev.date)}</td></tr></tbody></table>
+    <table style="margin:10pt 0"><tbody><tr><th style="width:18%">평가 대상</th><td>${esc(t.name)}</td><th style="width:18%">대표자</th><td>${esc(t.rep)}</td></tr><tr><th>사업자등록번호</th><td>${esc(t.bizno)}</td><th>평가일</th><td>${esc(ev.date)}</td></tr><tr><th>과제명</th><td colspan="3">${esc(t.title)}</td></tr><tr><th>평가위원</th><td colspan="3">${esc(j.name)}${j.org?' ('+esc(j.org)+')':''}</td></tr></tbody></table>
     <table><thead><tr><th>평가 항목</th><th>세부 항목</th><th style="width:12%">배점</th><th style="width:12%">점수</th></tr></thead><tbody>
     ${ev.items.map(i=>{const g=i.group!==lastG?i.group:'';lastG=i.group;return`<tr><td>${esc(g)}</td><td>${esc(i.name)}</td><td style="text-align:right">${esc(i.max)}</td><td style="text-align:right">${esc(m[i.id]??'')}</td></tr>`}).join('')}
     <tr><th colspan="2">합계</th><th style="text-align:right">${maxTotal(ev)}</th><th style="text-align:right">${ft(tot)}</th></tr></tbody></table>
     <table style="margin-top:10pt"><tbody><tr><th style="width:18%;height:70pt">평가 의견</th><td>${esc((s.cmt||{})[t.id]||'')}</td></tr></tbody></table>
     ${signBox([j.name+(j.chair?' 위원장':' 위원')])}</div>`)})});
-  if(!pages.length)return toast('제출된 채점표가 없습니다');doPrint(pages.join(''))}
+  if(!pages.length)return toast(pick?'이 위원은 아직 제출하지 않았습니다':'제출된 채점표가 없습니다');doPrint(pages.join(''))}
 function printCodes(){const ev=S.ev;doPrint(`<div class="pg"><h1>${esc(ev.name)} 평가위원 코드</h1><table><thead><tr><th>위원</th><th>소속</th><th>위원 코드</th></tr></thead><tbody>${ev.judges.map(j=>`<tr><td style="padding:14pt 6pt">${esc(j.name)}</td><td>${esc(j.org)}</td><td style="font-size:18pt;letter-spacing:4pt">${esc(j.code)}</td></tr>`).join('')}</tbody></table><p>※ 줄을 따라 잘라 위원에게 한 장씩 전달하세요.</p></div>`)}
 
 /* ================= 샘플 ================= */
