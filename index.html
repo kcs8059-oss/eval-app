@@ -249,8 +249,8 @@ function tRules(){const ev=S.ev,R=ev.rules;return`
 <label>기준 점수 (기준 점수 방식일 때)<input data-r="cut" inputmode="decimal" value="${esc(R.cut)}"></label></div>
 <h2>동점 처리</h2><p class="muted">최종점수가 같으면 ①→②→③ 순서로 비교해 순위를 정합니다.</p>
 <label class="chk"><input type="checkbox" data-rb="tieBase"${R.tieBase?' checked':''}> ① 가점을 뺀 평가점수(위원 평균)가 높은 순</label>
-<h3>② 항목 평균 비교 순서</h3><div class="grid">
-${[0,1,2].map(n=>`<label>${n+1}순위<select data-tie="${n}"><option value="">선택 안 함</option>${ev.items.map(i=>`<option value="${esc(i.id)}"${R.tie[n]===i.id?' selected':''}>${esc(i.group?i.group+' — ':'')}${esc(i.name)}</option>`).join('')}</select></label>`).join('')}</div>
+<h3>② 항목 평균 비교 순서 <span class="muted">(하나 고르면 다음 순위 칸이 생깁니다)</span></h3><div class="grid">
+${Array.from({length:Math.min(ev.items.length,R.tie.length+1)},(_,n)=>n).map(n=>`<label>${n+1}순위<select data-tie="${n}"><option value="">${n<R.tie.length?'선택 해제':'선택 안 함'}</option>${ev.items.filter(i=>!R.tie.includes(i.id)||R.tie[n]===i.id).map(i=>`<option value="${esc(i.id)}"${R.tie[n]===i.id?' selected':''}>${esc(i.group?i.group+' — ':'')}${esc(i.name)}</option>`).join('')}</select></label>`).join('')}</div>
 <h3>③ 그래도 같을 때 처리 방법</h3><div class="grid">
 <label>처리 방법<select data-r="tieLast"><option value="chair"${(R.tieLast||'chair')==='chair'?' selected':''}>위원장(평가위원회) 판단 — 결과에 ‘동점’ 표시</option><option value="all"${R.tieLast==='all'?' selected':''}>동점자 모두 선정 (선정 수 초과 허용)</option><option value="lot"${R.tieLast==='lot'?' selected':''}>추첨 — 결과 화면의 추첨 버튼으로 순위 결정</option></select></label></div>
 <p class="muted">처리 방법은 선정 경계(예: 5위와 6위 사이)에 걸린 동점에만 적용됩니다. 그 밖의 동점은 같은 순위로 표시됩니다.</p>
