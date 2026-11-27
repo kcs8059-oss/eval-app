@@ -175,7 +175,7 @@ function go(view,extra){Object.assign(S,{view,confirm:null},extra||{});clearInte
 function vHome(){return`
 <div class="top"><div><h1>평가 관리</h1><div class="sub">서류·발표·제안서 평가 — 위원 채점, 자동 집계, 결과 출력</div></div></div>
 ${!API?'<div class="note">시안 모드: 데이터가 이 PC 브라우저에만 저장됩니다. 여러 PC에서 함께 쓰려면 구글 시트를 연결해야 합니다.</div>':''}
-${API&&!KEY?`<div class="note t"><b>기관 접속 코드</b>를 처음 한 번 입력해 주세요 (간사가 PC마다 설정)<div class="tools"><input id="key" type="password" style="max-width:220px"><button data-a="setkey">확인</button></div></div>`:''}
+${API&&!KEY?`<div class="note t"><b>기관 접속 코드</b>를 처음 한 번 입력해 주세요 (간사가 PC마다 설정)<div class="tools"><input id="key" type="password" style="max-width:220px"><button data-a="setkey">확인</button></div><span class="c-x" id="kmsg"></span></div>`:''}
 <div class="hero">
   <div class="card"><b>평가위원 입장</b><span class="muted">간사에게 받은 6자리 위원 코드를 입력해 주세요.</span>
     <input id="jcode" inputmode="numeric" maxlength="6" placeholder="위원 코드 6자리" style="font-size:22px;letter-spacing:4px;max-width:260px"><div><button data-a="jlogin">입장</button></div><span class="c-x" id="jmsg"></span></div>
@@ -392,7 +392,8 @@ function sample(){const ev=newEval();ev.name='(샘플) 2027 창업기업 서류�
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-a]');if(!b||b.disabled)return;const a=b.dataset.a,ev=S.ev;
  try{
   if(a==='home')return go('home');
-  if(a==='setkey'){KEY=$('key').value.trim();LS.set('ev.key',KEY);return render()}
+  if(a==='setkey'){const k=$('key').value.trim();if(!k)return;KEY=k;try{await call({op:'get',key:'cfg:admin'})}catch(e2){KEY='';$('kmsg').textContent=e2.code==='auth'?'기관 접속 코드가 맞지 않습니다. 구글 시트 스크립트 속성의 KEY 값을 확인해 주세요':'연결 실패 ('+(e2.code||'네트워크')+')';return}LS.set('ev.key',KEY);toast('기관 접속 코드가 저장되었습니다');return render()}
+  if((a==='alogin'||a==='jlogin')&&API&&!KEY){toast('맨 위 기관 접속 코드를 먼저 입력해 주세요');$('key')?.focus();return}
   if(a==='alogin'){const pin=$('apin').value.trim();if(!pin)return;let cfg=await Store.get('cfg:admin');
     if(!cfg){await Store.set('cfg:admin',{pin});toast('간사 비밀번호가 설정되었습니다. 잊지 않도록 보관해 주세요')}else if(cfg.pin!==pin){$('amsg').textContent='비밀번호가 맞지 않습니다';return}
     await loadEvals();return go('list')}
@@ -438,7 +439,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('[data-a]')
   if(a==='printResult')return printResult();
   if(a==='printSheets')return printSheets();
   if(a==='printCodes')return printCodes();
- }catch(err){toast('처리 실패 ('+(err?.code||err?.message||'네트워크')+')')}
+ }catch(err){if(err?.code==='auth'){KEY='';LS.set('ev.key','');toast('기관 접속 코드가 맞지 않습니다. 다시 입력해 주세요');return go('home')}toast('처리 실패 ('+(err?.code||err?.message||'네트워크')+')')}
 });
 document.addEventListener('input',e=>{const el=e.target,ev=S.ev,d=el.dataset;if(!ev)return;
   if(d.b){ev[d.b]=el.value;return saveEv()}
