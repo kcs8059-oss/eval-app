@@ -67,6 +67,18 @@ label{font-size:14px;color:var(--mut);display:block}label>input,label>select,lab
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
 .toast.on{opacity:1}
 #print{display:none}
+.strip{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}
+.strip button{background:none;color:var(--ink);border:1px solid var(--rule);gap:8px;display:inline-flex;align-items:center}
+.strip button[aria-current]{border:2px solid var(--teal)}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;align-items:start}
+.pdfbox{border:1px solid var(--rule);border-radius:10px;position:sticky;top:8px;height:calc(100vh - 24px);min-height:420px;display:flex;flex-direction:column;overflow:hidden}
+.pdfbox.static{position:static;height:75vh}
+.pdfbar{display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--rule)}
+.pdfbar b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pdfpages{flex:1;overflow:auto;background:light-dark(#e6ebeb,#1b2628);padding:6px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.pdfpages canvas{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);max-width:none;min-width:0}
+.upl{display:inline-flex;align-items:center;min-height:34px;padding:3px 10px;font-size:14px;border:1px solid var(--teal);color:var(--teal);border-radius:6px;cursor:pointer;white-space:nowrap}
+@media(max-width:900px){.split{grid-template-columns:1fr}.pdfbox{position:static;height:70vh}}
 @media(prefers-reduced-motion:reduce){.toast{transition:none}}
 @media(max-width:760px){.judge{grid-template-columns:1fr}}
 @media print{
@@ -103,6 +115,35 @@ const Store={
   async set(k,v){if(API)return call({op:'set',key:k,val:v});LS.set('ev.d.'+k,v)},
   async del(k){if(API)return call({op:'del',key:k});LS.del('ev.d.'+k)}
 };
+
+/* ================= 제출 서류(PDF) ================= */
+const MEMF={};
+const IDB={db:null,async open(){if(this.db)return this.db;this.db=await new Promise((res,rej)=>{const r=indexedDB.open('evalfiles',1);r.onupgradeneeded=()=>r.result.createObjectStore('f');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});return this.db},
+  async tx(mode,fn){const db=await this.open();return new Promise((res,rej)=>{const t=db.transaction('f',mode);const rq=fn(t.objectStore('f'));t.oncomplete=()=>res(rq&&rq.result);t.onerror=()=>rej(t.error)})},
+  async get(k){try{return await this.tx('readonly',s=>s.get(k))}catch{return MEMF[k]}},async set(k,v){MEMF[k]=v;try{await this.tx('readwrite',s=>s.put(v,k))}catch{}},async del(k){delete MEMF[k];try{await this.tx('readwrite',s=>s.delete(k))}catch{}}};
+const FILECACHE={};
+const toB64=file=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]);r.onerror=()=>rej(r.error);r.readAsDataURL(file)});
+const fromB64=b=>{const s=atob(b),u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u};
+const Files={
+  async put(file,old){if(API){const r=await call({op:'putFile',name:file.name,b64:await toB64(file),old:old||''});return r.fileId}const id='f'+uid();await IDB.set(id,file);if(old)IDB.del(old);return id},
+  async get(id){if(FILECACHE[id])return FILECACHE[id];let u;if(API)u=fromB64((await call({op:'getFile',fileId:id})).b64);else{const b=await IDB.get(id);if(!b)throw{code:'파일 없음'};u=new Uint8Array(await b.arrayBuffer())}FILECACHE[id]=u;return u},
+  async del(id){delete FILECACHE[id];if(API)return call({op:'delFile',fileId:id});return IDB.del(id)}
+};
+let pdfZoom=1,pdfToken=0;
+async function pdfLib(){if(!window.pdfjsLib)await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';s.onload=res;s.onerror=()=>rej({code:'PDF 뷰어 로딩 실패'});document.head.appendChild(s)});
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';return window.pdfjsLib}
+async function showPdf(){const box=$('pdfbox'),pages=$('pdfpages');if(!box||!box.dataset.pdf)return;const id=box.dataset.pdf,my=++pdfToken;
+  pages.innerHTML='<p class="muted" style="padding:20px">제출 서류를 불러오는 중…</p>';
+  try{const lib=await pdfLib();const bytes=await Files.get(id);if(my!==pdfToken)return;const doc=await lib.getDocument({data:bytes.slice()}).promise;if(my!==pdfToken)return;
+    pages.innerHTML='';$('pdfinfo').textContent=doc.numPages+'쪽 · '+Math.round(pdfZoom*100)+'%';const W=Math.max(200,pages.clientWidth-16),dpr=window.devicePixelRatio||1;
+    for(let p=1;p<=doc.numPages;p++){if(my!==pdfToken)return;const pg=await doc.getPage(p);const sc=W/pg.getViewport({scale:1}).width*pdfZoom;const vp=pg.getViewport({scale:sc*dpr});
+      const c=document.createElement('canvas');c.width=Math.floor(vp.width);c.height=Math.floor(vp.height);c.style.width=Math.floor(vp.width/dpr)+'px';c.setAttribute('aria-label',p+'쪽');pages.appendChild(c);
+      await pg.render({canvasContext:c.getContext('2d'),viewport:vp}).promise}}
+  catch(e){if(my===pdfToken)pages.innerHTML='<p class="c-x" style="padding:20px">PDF를 불러오지 못했습니다 ('+esc(e?.code||e?.message||'오류')+')</p>'}}
+const pdfBox=(info,cls)=>`<div class="pdfbox${cls?' '+cls:''}" id="pdfbox" data-pdf="${esc(info?.id||'')}"><div class="pdfbar"><b style="flex:1">${info?esc(info.name):'제출 서류 없음'}</b><span class="muted" id="pdfinfo"></span><button class="g s" data-a="zoom" data-z="-1" aria-label="축소">−</button><button class="g s" data-a="zoom" data-z="1" aria-label="확대">+</button></div><div class="pdfpages" id="pdfpages">${info?'':'<p class="muted" style="padding:20px">이 대상은 등록된 PDF가 없습니다.</p>'}</div></div>`;
+async function uploadPdf(i,file){const t=S.ev.targets[i];if(!t||!file)return;if(!/\.pdf$/i.test(file.name)&&file.type!=='application/pdf')return toast('PDF 파일만 올릴 수 있습니다');
+  if(file.size>20*1024*1024)return toast('20MB 이하 파일만 올릴 수 있습니다');toast('업로드 중입니다…');
+  try{const id=await Files.put(file,t.pdf?.id);t.pdf={id,name:file.name,size:file.size};saveEv();render();toast('업로드했습니다: '+file.name)}catch(e){toast('업로드 실패 ('+(e?.code||e?.message||'네트워크')+')')}}
 
 /* ================= 공통 ================= */
 const uid=()=>Math.random().toString(36).slice(2,9);
@@ -264,10 +305,13 @@ ${Array.from({length:Math.min(ev.items.length,R.tie.length+1)},(_,n)=>n).map(n=>
 
 function tTargets(){const ev=S.ev;return`
 <h2>평가 대상 <span class="muted">${ev.targets.length}개</span></h2>
-<div class="scroll"><table><thead><tr><th style="width:44px">순서</th><th>기업·대상명</th><th>사업자번호</th><th>대표자</th><th>과제명</th>${ev.bonuses.map(b=>`<th class="c">${esc(b.name)}<br>${+b.pts>0?'+':''}${esc(b.pts)}</th>`).join('')}<th></th></tr></thead><tbody>
+<div class="scroll"><table><thead><tr><th style="width:44px">순서</th><th>기업·대상명</th><th>사업자번호</th><th>대표자</th><th>과제명</th><th>제출 서류 (PDF)</th>${ev.bonuses.map(b=>`<th class="c">${esc(b.name)}<br>${+b.pts>0?'+':''}${esc(b.pts)}</th>`).join('')}<th></th></tr></thead><tbody>
 ${ev.targets.map((t,i)=>`<tr><td class="num">${i+1}</td><td><input data-c="targets" data-i="${i}" data-k="name" value="${esc(t.name)}"></td><td><input data-c="targets" data-i="${i}" data-k="bizno" value="${esc(t.bizno)}"></td><td><input data-c="targets" data-i="${i}" data-k="rep" value="${esc(t.rep)}"></td><td><input data-c="targets" data-i="${i}" data-k="title" value="${esc(t.title)}"></td>
+<td style="white-space:nowrap">${t.pdf?`<button class="g s" data-a="pv" data-i="${i}" title="${esc(t.pdf.name)}">보기</button> <button class="d s" data-a="pdfDel" data-i="${i}">${S.confirm==='pd'+i?'삭제할까요?':'삭제'}</button> `:''}<label class="upl">${t.pdf?'교체':'PDF 올리기'}<input type="file" accept="application/pdf,.pdf" data-pdfup="${i}" hidden></label></td>
 ${ev.bonuses.map(b=>`<td class="c"><input type="checkbox" data-bonus="${esc(b.id)}" data-i="${i}"${(t.bonus||[]).includes(b.id)?' checked':''}></td>`).join('')}<td style="white-space:nowrap"><button class="g s" data-a="up" data-c="targets" data-i="${i}" aria-label="위로">↑</button> <button class="d s" data-a="rm" data-c="targets" data-i="${i}">삭제</button></td></tr>`).join('')}
 </tbody></table></div><div class="tools"><button class="g" data-a="add" data-c="targets">대상 추가</button><button class="g" data-a="shuffle">평가 순서 무작위 추첨</button></div>
+${S.pv!=null&&ev.targets[S.pv]?.pdf?`<div style="margin-top:14px"><div class="tools" style="justify-content:space-between"><h3 style="margin:0">${esc(ev.targets[S.pv].name)} 제출 서류</h3><button class="g s" data-a="pvClose">닫기</button></div>${pdfBox(ev.targets[S.pv].pdf,'static')}</div>`:''}
+<p class="muted">제출 서류 PDF는 20MB 이하로 올려 주세요. 올린 PDF는 위원 채점 화면 왼쪽에 표시됩니다.</p>
 <h3>엑셀에서 붙여넣기</h3><p class="muted">‘기업명 | 사업자번호 | 대표자 | 과제명’ 순서로 복사해 붙여넣으세요.</p>
 <textarea id="pasteTargets"></textarea><div class="tools"><button class="g" data-a="pasteTargets" data-m="add">아래에 추가</button><button class="g" data-a="pasteTargets" data-m="replace">전체 바꾸기</button></div>`}
 
@@ -326,12 +370,12 @@ const filled=t=>{const m=(s.marks||{})[t.id];return m&&ev.items.every(i=>m[i.id]
 const locked=s.submitted&&ev.fair.lock;
 if(S.cur==='__sum'||locked)return vSummary(ev,j,s,T,filled,locked);
 const t=T.find(x=>x.id===S.cur)||T[0];if(!t)return`<div class="top"><h1>평가할 대상이 없습니다</h1><button class="g" data-a="jout">나가기</button></div>`;S.cur=t.id;
-const m=(s.marks[t.id]=s.marks[t.id]||{});const tot=ev.items.reduce((a,i)=>a+(+m[i.id]||0),0);const idx=T.indexOf(t);
+const hasPdf=ev.targets.some(x=>x.pdf);const m=(s.marks[t.id]=s.marks[t.id]||{});const tot=ev.items.reduce((a,i)=>a+(+m[i.id]||0),0);const idx=T.indexOf(t);
 let lastG=null;return`
 <div class="top"><div><h1>${esc(ev.name)}</h1><div class="sub">${esc(j.name)} 위원 · ${T.filter(filled).length} / ${T.length} 완료 <span id="saved" class="muted"></span></div></div><div class="tools"><button data-a="jsum">제출하기</button><button class="g" data-a="jout">나가기</button></div></div>
-<div class="judge"><div class="tlist">${T.map((x,i)=>`<button data-a="jcur" data-t="${esc(x.id)}"${x.id===t.id?' aria-current="true"':''}><span>${i+1}. ${esc(x.name)}</span><span class="${filled(x)?'c-ok':'c-m'}">${filled(x)?'완료':'미완'}</span></button>`).join('')}
+${hasPdf?'<div class="strip">':'<div class="judge"><div class="tlist">'}${T.map((x,i)=>`<button data-a="jcur" data-t="${esc(x.id)}"${x.id===t.id?' aria-current="true"':''}><span>${i+1}. ${esc(x.name)}</span><span class="${filled(x)?'c-ok':'c-m'}">${filled(x)?'완료':'미완'}</span></button>`).join('')}
 ${(s.conflicts||[]).length?`<p class="muted">제척: ${ev.targets.filter(x=>s.conflicts.includes(x.id)).map(x=>esc(x.name)).join(', ')}</p>`:''}</div>
-<div class="sheet"><div class="tools" style="justify-content:space-between;margin-top:0"><div><h2 style="margin:0">${esc(t.name)}</h2><div class="muted">${esc(t.rep)} · ${esc(t.title)}</div></div><div class="c"><div class="total" id="tot">${ft(tot)}</div><div class="muted">/ ${maxTotal(ev)}점</div></div></div>
+${hasPdf?'<div class="split">'+pdfBox(t.pdf):''}<div class="sheet"><div class="tools" style="justify-content:space-between;margin-top:0"><div><h2 style="margin:0">${esc(t.name)}</h2><div class="muted">${esc(t.rep)} · ${esc(t.title)}</div></div><div class="c"><div class="total" id="tot">${ft(tot)}</div><div class="muted">/ ${maxTotal(ev)}점</div></div></div>
 <table><thead><tr><th>평가 항목</th><th>세부 항목</th><th class="num">배점</th><th class="num">점수</th></tr></thead><tbody>
 ${ev.items.map(i=>{const g=i.group!==lastG?i.group:'';lastG=i.group;return`<tr><td><b>${esc(g)}</b></td><td>${esc(i.name)}${i.guide?`<div class="muted">${esc(i.guide)}</div>`:''}</td><td class="num">${esc(i.max)}</td>
 <td class="in">${ev.inputMode==='grade'?`<select data-sc="${esc(i.id)}"><option value="">선택</option>${GRADES.map(([n,p])=>{const v=r2(+i.max*p/100,2);return`<option value="${v}"${m[i.id]!==undefined&&m[i.id]!==''&&+m[i.id]===v?' selected':''}>${n} (${v})</option>`}).join('')}</select>`
@@ -356,6 +400,7 @@ function render(){
   const a=$('app');
   a.innerHTML=S.view==='home'?vHome():S.view==='list'?vList():S.view==='edit'?vEdit():S.view==='judge'?vJudge():'';
   if(S.view==='edit'&&S.tab==='items')fillTpl();
+  if($('pdfbox'))showPdf();
   if(S.view==='edit'&&['progress','result'].includes(S.tab)&&S.ev.status==='평가중'){clearInterval(poll);poll=setInterval(async()=>{if(document.hidden)return;await loadScores(S.ev);if(S.view==='edit'&&['progress','result'].includes(S.tab))render()},15000)}
 }
 async function fillTpl(){const sel=$('tpl');if(!sel)return;try{const l=await Store.list('tpl:');sel.innerHTML='<option value="">저장된 템플릿 불러오기…</option>'+l.map(x=>`<option value="${esc(x.key)}">${esc(x.val.name)}</option>`).join('')}catch{}}
@@ -433,10 +478,10 @@ document.addEventListener('click',async e=>{const b=e.target.closest('[data-a]')
   if(a==='new'){const n=newEval();await Store.set('eval:'+n.id,n);S.scores={};return go('edit',{ev:n,tab:'basic'})}
   if(a==='sample'){const{ev:n,sc}=sample();await Store.set('eval:'+n.id,n);for(const[k,v]of Object.entries(sc))await Store.set('score:'+n.id+':'+k,v);S.scores=sc;toast('샘플 평가를 만들었습니다 (위원 4명 제출, 1명 작성 중)');return go('edit',{ev:n,tab:'result'})}
   if(a==='open'){const n=S.evals.find(x=>x.id===b.dataset.id);await loadScores(n);return go('edit',{ev:n,tab:n.status==='준비'?'basic':'progress'})}
-  if(a==='copy'){const o=S.evals.find(x=>x.id===b.dataset.id);const n=JSON.parse(JSON.stringify(o));n.id='e'+uid();n.name=o.name+' (복제)';n.status='준비';n.date=today();n.created=new Date().toISOString();n.judges.forEach(j=>{j.id='j'+uid();j.code=''});n.judges.forEach(j=>j.code=newCode(n));
+  if(a==='copy'){const o=S.evals.find(x=>x.id===b.dataset.id);const n=JSON.parse(JSON.stringify(o));n.id='e'+uid();n.name=o.name+' (복제)';n.status='준비';n.date=today();n.created=new Date().toISOString();n.targets.forEach(t=>delete t.pdf);n.judges.forEach(j=>{j.id='j'+uid();j.code=''});n.judges.forEach(j=>j.code=newCode(n));
     await Store.set('eval:'+n.id,n);await loadEvals();toast('복제했습니다');return render()}
-  if(a==='delev'){const id=b.dataset.id;if(S.confirm!=='del'+id){S.confirm='del'+id;return render()}await Store.del('eval:'+id);for(const x of await Store.list('score:'+id+':'))await Store.del(x.key);await loadEvals();S.confirm=null;return render()}
-  if(a==='tab'){S.tab=b.dataset.t;S.confirm=null;if(['progress','result'].includes(S.tab))await loadScores(ev);clearInterval(poll);return render()}
+  if(a==='delev'){const id=b.dataset.id;if(S.confirm!=='del'+id){S.confirm='del'+id;return render()}const dv=S.evals.find(x=>x.id===id);for(const t of dv?.targets||[])if(t.pdf)try{await Files.del(t.pdf.id)}catch{}await Store.del('eval:'+id);for(const x of await Store.list('score:'+id+':'))await Store.del(x.key);await loadEvals();S.confirm=null;return render()}
+  if(a==='tab'){S.tab=b.dataset.t;S.confirm=null;S.pv=null;if(['progress','result'].includes(S.tab))await loadScores(ev);clearInterval(poll);return render()}
   if(a==='refresh'){await loadScores(ev);toast('새로고침했습니다');return render()}
   if(a==='start'){const miss=[!ev.items.length&&'평가표',!ev.targets.length&&'대상',!ev.judges.length&&'위원'].filter(Boolean);if(miss.length)return toast(miss.join(', ')+'을(를) 먼저 등록해 주세요');
     if(maxTotal(ev)<=0)return toast('배점을 확인해 주세요');ev.status='평가중';saveEv();toast('평가를 시작했습니다. 위원들이 코드로 입장할 수 있습니다');S.tab='progress';await loadScores(ev);return render()}
@@ -461,6 +506,10 @@ document.addEventListener('click',async e=>{const b=e.target.closest('[data-a]')
     const lots={};Object.values(groups).forEach(g=>{for(let i=g.length-1;i>0;i--){const k=Math.floor(Math.random()*(i+1));[g[i],g[k]]=[g[k],g[i]]}g.forEach((id,i)=>lots[id]=i+1)});
     if(!Object.keys(lots).length)return toast('추첨할 동점이 없습니다');ev.lots=lots;ev.lotAt=new Date(Date.now()+9*36e5).toISOString();saveEv();toast('추첨했습니다. 같은 점수끼리 추첨 순번대로 순위가 정해집니다');return render()}
   if(a==='lotReset'){if(S.confirm!=='lotReset'){S.confirm='lotReset';return render()}delete ev.lots;delete ev.lotAt;S.confirm=null;saveEv();return render()}
+  if(a==='zoom'){pdfZoom=Math.min(3,Math.max(.5,r2(pdfZoom+(+b.dataset.z)*.25,2)));return showPdf()}
+  if(a==='pv'){S.pv=+b.dataset.i;render();return $('pdfbox')?.scrollIntoView({block:'start'})}
+  if(a==='pvClose'){S.pv=null;return render()}
+  if(a==='pdfDel'){const i=+b.dataset.i;if(S.confirm!=='pd'+i){S.confirm='pd'+i;return render()}const t=ev.targets[i];try{await Files.del(t.pdf.id)}catch{}delete t.pdf;S.confirm=null;if(S.pv===i)S.pv=null;saveEv();toast('PDF를 삭제했습니다');return render()}
   if(a==='printResult')return printResult();
   if(a==='printSheets')return printSheets();
   if(a==='printCodes')return printCodes();
@@ -483,6 +532,7 @@ document.addEventListener('change',async e=>{const el=e.target,ev=S.ev,d=el.data
   if(d.chair!==undefined){ev.judges.forEach((j,i)=>j.chair=i===+d.chair);return saveEv()}
   if(d.cf){const s=S.js;s.conflicts=el.checked?[...(s.conflicts||[]),d.cf]:(s.conflicts||[]).filter(x=>x!==d.cf);return saveJudge()}
   if(d.sc&&el.tagName==='SELECT'){/* 등급 선택은 input 이벤트로 처리됨 */}
+  if(d.pdfup!==undefined){return uploadPdf(+d.pdfup,el.files&&el.files[0])}
   if(el.id==='tpl'&&el.value){const tp=await Store.get(el.value);if(!tp)return;ev.items=tp.items.map(i=>({...i,id:'i'+uid()}));const map={};ev.bonuses=(tp.bonuses||[]).map(b=>{const id='b'+uid();map[b.id]=id;return{...b,id}});ev.inputMode=tp.inputMode||'score';ev.rules={...ev.rules,...tp.rules,tie:[]};
     saveEv();toast('템플릿을 불러왔습니다: '+tp.name+' (동점 순서는 다시 선택해 주세요)');return render()}
 });
